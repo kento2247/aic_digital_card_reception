@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Reception</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fa-solid fa-qrcode"></i>
+                    <span>Event Reception</span>
+                </div>
+                <button id="settings-btn" class="icon-btn" aria-label="Settings">
+                    <i class="fa-solid fa-gear"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-container">
+            <!-- Event Selector -->
+            <div class="event-selector-container">
+                <label for="event-select" class="input-label">Select Event</label>
+                <div class="select-wrapper">
+                    <select id="event-select" disabled>
+                        <option value="">Loading events...</option>
+                    </select>
+                    <i class="fa-solid fa-chevron-down select-icon"></i>
+                </div>
+
+                <!-- Default Values Configuration -->
+                <div class="default-config-container"
+                    style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+                    <div class="config-row" style="display: flex; gap: 1rem;">
+                        <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                            <label for="default-score" class="input-label" style="font-size: 0.8rem;">Default
+                                Score</label>
+                            <input type="number" id="default-score" value="0" style="width: 100%; padding: 0.5rem;">
+                        </div>
+                        <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                            <label for="default-coin" class="input-label" style="font-size: 0.8rem;">Default
+                                Coin</label>
+                            <input type="number" id="default-coin" value="0" style="width: 100%; padding: 0.5rem;">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scanner Section -->
+            <div class="scanner-section">
+                <div id="reader"></div>
+                <div id="scan-status" class="scan-status">Ready to scan</div>
+            </div>
+
+            <!-- Manual Input (Fallback) -->
+            <div class="manual-input-section">
+                <button id="toggle-manual-input" class="text-btn">Enter User ID Manually</button>
+                <div id="manual-input-container" class="hidden">
+                    <input type="text" id="manual-user-id" placeholder="Enter User ID">
+                    <button id="manual-submit-btn" class="primary-btn">Check</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- User Info Modal -->
+        <div id="user-modal" class="modal-overlay hidden">
+            <div class="modal-content">
+                <button class="close-modal-btn" id="close-user-modal">&times;</button>
+
+                <div id="user-loading" class="loading-spinner hidden"></div>
+
+                <div id="user-content">
+                    <div class="user-header">
+                        <div class="user-avatar">
+                            <i class="fa-solid fa-user"></i>
+                        </div>
+                        <h2 id="user-name">User Name</h2>
+                        <p id="user-id-display" class="user-id">ID: 12345</p>
+                        <div id="user-tags" class="user-tags">
+                            <!-- Tags like "Student", "1st Grade" will go here -->
+                        </div>
+                    </div>
+
+                    <div id="booking-status-container" class="status-container">
+                        <!-- Status badge will be injected here -->
+                    </div>
+
+                    <div id="action-container" class="action-container">
+                        <!-- Dynamic content based on status -->
+
+                        <!-- Case: Not Registered -->
+                        <div id="not-registered-actions" class="hidden">
+                            <div class="alert alert-warning">
+                                <i class="fa-solid fa-triangle-exclamation"></i>
+                                <span>This user is not registered for this event.</span>
+                            </div>
+                            <button id="register-btn" class="primary-btn danger-btn">
+                                <i class="fa-solid fa-user-plus"></i> Register Now
+                            </button>
+                        </div>
+
+                        <!-- Case: Registered (Confirmed/Lottery) -->
+                        <div id="checkin-actions" class="hidden">
+                            <div class="form-group">
+                                <label for="score-input">Add Score</label>
+                                <div class="number-input">
+                                    <button class="step-btn minus" data-target="score-input">-</button>
+                                    <input type="number" id="score-input" value="0">
+                                    <button class="step-btn plus" data-target="score-input">+</button>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="coin-input">Add Coins</label>
+                                <div class="number-input">
+                                    <button class="step-btn minus" data-target="coin-input">-</button>
+                                    <input type="number" id="coin-input" value="0">
+                                    <button class="step-btn plus" data-target="coin-input">+</button>
+                                </div>
+                            </div>
+                            <button id="confirm-checkin-btn" class="primary-btn success-btn">
+                                <i class="fa-solid fa-check"></i> Confirm Check-in
+                            </button>
+                        </div>
+
+                        <!-- Case: Already Attended -->
+                        <div id="attended-actions" class="hidden">
+                            <div class="alert alert-success">
+                                <i class="fa-solid fa-circle-check"></i>
+                                <span>Already Checked In</span>
+                            </div>
+                            <p class="checkin-time">Checked in at: <span id="checkin-time-display">--:--</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal-overlay hidden">
+            <div class="modal-content">
+                <h2>API Configuration</h2>
+                <p class="modal-desc">Enter your API connection details.</p>
+
+                <div class="form-group">
+                    <label for="api-url">API Base URL</label>
+                    <input type="url" id="api-url" placeholder="https://api.example.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="api-key">API Key</label>
+                    <input type="password" id="api-key" placeholder="Enter your API Key">
+                </div>
+
+                <div class="modal-footer">
+                    <button id="save-settings-btn" class="primary-btn">Save & Connect</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="toast" class="toast hidden">
+            <div class="toast-icon"><i class="fa-solid fa-info-circle"></i></div>
+            <div class="toast-message">Notification message</div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
