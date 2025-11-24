@@ -13,6 +13,9 @@ let state = {
     currentBooking: null
 };
 
+// Html5QrcodeScanner instance (kept global so we can stop/restart scanning)
+let html5Scanner = null;
+
 // DOM Elements
 const els = {
     settingsBtn: document.getElementById('settings-btn'),
@@ -213,24 +216,39 @@ async function loadEvents() {
 }
 
 function startScanner() {
-    const html5QrcodeScanner = new Html5QrcodeScanner(
+    // If a scanner already exists, clear it first
+    if (html5Scanner) {
+        html5Scanner.clear().catch(() => { /* ignore */ });
+        html5Scanner = null;
+    }
+
+    html5Scanner = new Html5QrcodeScanner(
         "reader",
         { fps: 10, qrbox: { width: 250, height: 250 } },
         /* verbose= */ false
     );
 
-    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+    html5Scanner.render(onScanSuccess, onScanFailure);
 }
 
 function onScanSuccess(decodedText, decodedResult) {
-    // Prevent multiple scans
+    // Prevent multiple scans: set processing flag immediately to avoid race windows
     if (state.isProcessing) return;
+    state.isProcessing = true;
 
     // Basic validation: assume QR code is just the user_id
     // If it's a URL, extract the ID? For now assume raw ID.
     const userId = decodedText.trim();
 
     console.log(`Scan result: ${userId}`);
+    // Stop the scanner immediately to avoid further detections while we process.
+    if (html5Scanner) {
+        html5Scanner.clear().catch(err => console.warn('Failed to clear scanner', err));
+        html5Scanner = null;
+    }
+
+    // Call handler (it will show modal and perform API calls). The handler will
+    // clear `state.isProcessing` when finished and restart the scanner.
     handleUserScan(userId);
 }
 
@@ -242,10 +260,12 @@ function onScanFailure(error) {
 async function handleUserScan(userId) {
     if (!state.selectedEventId) {
         showToast('Please select an event first');
+        // If we were marked processing by the scanner, clear the flag so scanning can continue
+        state.isProcessing = false;
         return;
     }
 
-    state.isProcessing = true;
+    // `state.isProcessing` is set by the scanner immediately when a scan is received.
     showUserModal();
     setModalLoading(true);
 
@@ -283,6 +303,14 @@ async function handleUserScan(userId) {
     } finally {
         setModalLoading(false);
         state.isProcessing = false;
+
+        // Restart scanner after a short delay to avoid immediate re-detection
+        // which can cause the modal to flash. If a scanner already exists, do nothing.
+        setTimeout(() => {
+            if (!html5Scanner) {
+                startScanner();
+            }
+        }, 1200);
     }
 }
 
