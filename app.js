@@ -15,6 +15,19 @@ let state = {
 
 // Html5QrcodeScanner instance (kept global so we can stop/restart scanning)
 let html5Scanner = null;
+// Whether we've paused the scanner because a modal is open / processing
+let scannerPaused = false;
+
+function stopScanner() {
+    if (html5Scanner) {
+        try {
+            html5Scanner.clear();
+        } catch (e) {
+            console.warn('Error clearing scanner', e);
+        }
+        html5Scanner = null;
+    }
+}
 
 // DOM Elements
 const els = {
@@ -242,13 +255,12 @@ function onScanSuccess(decodedText, decodedResult) {
 
     console.log(`Scan result: ${userId}`);
     // Stop the scanner immediately to avoid further detections while we process.
-    if (html5Scanner) {
-        html5Scanner.clear().catch(err => console.warn('Failed to clear scanner', err));
-        html5Scanner = null;
-    }
+    stopScanner();
+    scannerPaused = true;
 
     // Call handler (it will show modal and perform API calls). The handler will
-    // clear `state.isProcessing` when finished and restart the scanner.
+    // clear `state.isProcessing` when finished. Scanner will be restarted when
+    // the modal is closed (hideUserModal).
     handleUserScan(userId);
 }
 
@@ -258,16 +270,24 @@ function onScanFailure(error) {
 }
 
 async function handleUserScan(userId) {
+    // Mark processing (may already be set by scanner path)
+    state.isProcessing = true;
+
     if (!state.selectedEventId) {
         showToast('Please select an event first');
-        // If we were marked processing by the scanner, clear the flag so scanning can continue
+        // If we cleared the scanner earlier, restart it so scanning can continue
         state.isProcessing = false;
+        if (!html5Scanner) startScanner();
         return;
     }
 
-    // `state.isProcessing` is set by the scanner immediately when a scan is received.
-    showUserModal();
-    setModalLoading(true);
+    const modalOpen = !els.userModal.classList.contains('hidden');
+    if (!modalOpen) {
+        showUserModal();
+    } else {
+        // If modal already open, just show loading state while we refresh content
+        setModalLoading(true);
+    }
 
     try {
         // 1. Fetch User Info
@@ -298,19 +318,17 @@ async function handleUserScan(userId) {
         renderUserModal(state.currentUser, bookingStatus, bookingData);
 
     } catch (err) {
-        hideUserModal();
-        showToast('Failed to load user data');
+        // Keep modal open if it was already open; otherwise hide it.
+        if (!els.userModal.classList.contains('hidden')) {
+            // show error inside modal briefly
+            showToast('Failed to load user data');
+        } else {
+            hideUserModal();
+            showToast('Failed to load user data');
+        }
     } finally {
         setModalLoading(false);
         state.isProcessing = false;
-
-        // Restart scanner after a short delay to avoid immediate re-detection
-        // which can cause the modal to flash. If a scanner already exists, do nothing.
-        setTimeout(() => {
-            if (!html5Scanner) {
-                startScanner();
-            }
-        }, 1200);
     }
 }
 
@@ -426,6 +444,10 @@ function hideSettingsModal() {
 }
 
 function showUserModal() {
+    // Ensure scanner is stopped while modal is visible
+    stopScanner();
+    scannerPaused = true;
+
     els.userModal.classList.remove('hidden');
     els.userContent.classList.add('hidden');
 }
@@ -433,6 +455,19 @@ function showUserModal() {
 function hideUserModal() {
     els.userModal.classList.add('hidden');
     state.isProcessing = false;
+
+    // Restart scanner if it was paused when modal opened
+    if (scannerPaused) {
+        scannerPaused = false;
+        // small delay to avoid immediate re-detection
+        setTimeout(() => {
+            try {
+                startScanner();
+            } catch (e) {
+                console.warn('Failed to restart scanner', e);
+            }
+        }, 500);
+    }
 }
 
 function setModalLoading(isLoading) {
