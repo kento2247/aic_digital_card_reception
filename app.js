@@ -1,8 +1,8 @@
 // Config
 const CONFIG_KEY = 'reception_app_config';
 let config = {
-    apiUrl: '',
-    apiKey: ''
+    apiUrl: DEFAULT_CONFIG.apiUrl || '',
+    apiKey: DEFAULT_CONFIG.apiKey || ''
 };
 
 // State
@@ -50,7 +50,9 @@ function init() {
     loadConfig();
     setupEventListeners();
 
-    if (!config.apiUrl || !config.apiKey) {
+    // Start scanner if we at least have an API base URL configured.
+    // Don't require `apiKey` to start scanning so mobile camera isn't blocked.
+    if (!config.apiUrl) {
         showSettingsModal();
     } else {
         loadEvents();
@@ -62,9 +64,12 @@ function loadConfig() {
     const saved = localStorage.getItem(CONFIG_KEY);
     if (saved) {
         config = JSON.parse(saved);
-        els.apiUrlInput.value = config.apiUrl;
-        els.apiKeyInput.value = config.apiKey;
     }
+
+    // Populate inputs with saved or default values
+    els.apiUrlInput.value = config.apiUrl || DEFAULT_CONFIG.apiUrl || '';
+    els.apiKeyInput.value = config.apiKey || DEFAULT_CONFIG.apiKey || '';
+}
 }
 
 function saveConfig() {
