@@ -70,7 +70,6 @@ function loadConfig() {
     els.apiUrlInput.value = config.apiUrl || DEFAULT_CONFIG.apiUrl || '';
     els.apiKeyInput.value = config.apiKey || DEFAULT_CONFIG.apiKey || '';
 }
-}
 
 function saveConfig() {
     config.apiUrl = els.apiUrlInput.value.replace(/\/$/, ''); // Remove trailing slash
