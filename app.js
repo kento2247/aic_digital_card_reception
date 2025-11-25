@@ -8,6 +8,7 @@ let config = {
 // State
 let state = {
     selectedEventId: null,
+    selectedEvent: null,
     isScanning: true,
     currentUser: null,
     currentBooking: null
@@ -17,6 +18,8 @@ let state = {
 let html5Scanner = null;
 // Whether we've paused the scanner because a modal is open / processing
 let scannerPaused = false;
+// All loaded events (used to lookup selected event details)
+let allEvents = [];
 
 function stopScanner() {
     if (html5Scanner) {
@@ -104,6 +107,7 @@ function setupEventListeners() {
 
     els.eventSelect.addEventListener('change', (e) => {
         state.selectedEventId = e.target.value;
+        state.selectedEvent = allEvents.find(event => event.event_id === e.target.value);
     });
 
     els.closeUserModal.addEventListener('click', hideUserModal);
@@ -206,6 +210,9 @@ async function loadEvents() {
             activeEvents.sort((a, b) => {
                 return new Date(b.event_start_datetime) - new Date(a.event_start_datetime);
             });
+
+            // Store all active events for later lookup
+            allEvents = activeEvents;
 
             if (activeEvents.length > 0) {
                 activeEvents.forEach(event => {
@@ -406,11 +413,12 @@ async function confirmCheckin() {
 
         // 2. Add Score (if > 0)
         const score = parseInt(els.scoreInput.value);
+        const eventName = state.selectedEvent?.event_name || state.selectedEventId;
         if (score !== 0) {
             await apiCall('/api/score/write', 'POST', {
                 user_id: state.currentUser.id,
                 score_change: score,
-                description: `Event Check-in: ${state.selectedEventId}`
+                description: eventName
             });
         }
 
@@ -420,7 +428,7 @@ async function confirmCheckin() {
             await apiCall('/api/coin/write', 'POST', {
                 user_id: state.currentUser.id,
                 coin_change: coin,
-                description: `Event Check-in: ${state.selectedEventId}`
+                description: eventName
             });
         }
 
