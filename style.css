@@ -477,4 +477,31 @@ input[type="number"] {
     100% {
         transform: rotate(360deg);
     }
+}/* Camera Controls */
+.camera-controls {
+    padding: 1rem;
+    background: var(--bg-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.camera-select-wrapper select {
+    background: white;
+}
+
+.reader-container {
+    width: 100%;
+    flex: 1;
+    background: #000;
+    min-height: 250px;
+}
+
+.scan-actions {
+    padding: 1rem;
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+}
+
+.scan-actions button {
+    max-width: 200px;
 }

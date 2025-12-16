@@ -59,7 +59,27 @@
 
             <!-- Scanner Section -->
             <div class="scanner-section">
-                <div id="reader"></div>
+                <!-- Camera Controls -->
+                <div class="camera-controls">
+                    <div class="select-wrapper camera-select-wrapper">
+                        <select id="camera-select">
+                            <option value="">Select Camera</option>
+                        </select>
+                        <i class="fa-solid fa-camera select-icon"></i>
+                    </div>
+                </div>
+
+                <div id="reader" class="reader-container"></div>
+
+                <div class="scan-actions">
+                    <button id="start-scan-btn" class="primary-btn">
+                        <i class="fa-solid fa-qrcode"></i> Start Scan
+                    </button>
+                    <button id="stop-scan-btn" class="primary-btn danger-btn hidden">
+                        <i class="fa-solid fa-stop"></i> Stop Scan
+                    </button>
+                </div>
+
                 <div id="scan-status" class="scan-status">Ready to scan</div>
             </div>
 
@@ -86,7 +106,7 @@
                             <i class="fa-solid fa-user"></i>
                         </div>
                         <h2 id="user-name">User Name</h2>
-                        <p id="user-id-display" class="user-id">ID: 12345</p>
+                        <p id="user-id-display" class="user-id">ID: ---</p>
                         <div id="user-tags" class="user-tags">
                             <!-- Tags like "Student", "1st Grade" will go here -->
                         </div>

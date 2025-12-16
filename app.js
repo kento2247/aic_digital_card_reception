@@ -1,5 +1,7 @@
 // Config
 const CONFIG_KEY = 'reception_app_config';
+const DEFAULT_CONFIG = { apiUrl: '', apiKey: '' };
+
 let config = {
     apiUrl: DEFAULT_CONFIG.apiUrl || '',
     apiKey: DEFAULT_CONFIG.apiKey || ''
@@ -9,28 +11,15 @@ let config = {
 let state = {
     selectedEventId: null,
     selectedEvent: null,
-    isScanning: true,
+    isScanning: false,
+    isProcessing: false,
     currentUser: null,
-    currentBooking: null
+    currentBooking: null,
+    selectedCameraId: null
 };
 
-// Html5QrcodeScanner instance (kept global so we can stop/restart scanning)
-let html5Scanner = null;
-// Whether we've paused the scanner because a modal is open / processing
-let scannerPaused = false;
-// All loaded events (used to lookup selected event details)
-let allEvents = [];
-
-function stopScanner() {
-    if (html5Scanner) {
-        try {
-            html5Scanner.clear();
-        } catch (e) {
-            console.warn('Error clearing scanner', e);
-        }
-        html5Scanner = null;
-    }
-}
+// Html5Qrcode instance
+let html5QrCode = null;
 
 // DOM Elements
 const els = {
@@ -40,6 +29,10 @@ const els = {
     apiUrlInput: document.getElementById('api-url'),
     apiKeyInput: document.getElementById('api-key'),
     eventSelect: document.getElementById('event-select'),
+    cameraSelect: document.getElementById('camera-select'),
+    startScanBtn: document.getElementById('start-scan-btn'),
+    stopScanBtn: document.getElementById('stop-scan-btn'),
+    scanStatus: document.getElementById('scan-status'),
     userModal: document.getElementById('user-modal'),
     closeUserModal: document.getElementById('close-user-modal'),
     userLoading: document.getElementById('user-loading'),
@@ -69,25 +62,35 @@ function init() {
     loadConfig();
     setupEventListeners();
 
-    // Start scanner if we at least have an API base URL configured.
-    // Don't require `apiKey` to start scanning so mobile camera isn't blocked.
-    if (!config.apiUrl) {
-        showSettingsModal();
-    } else {
-        loadEvents();
-        startScanner();
+    // Initialize scanner instance
+    try {
+        html5QrCode = new Html5Qrcode("reader");
+    } catch (e) {
+        console.warn("Failed to init Html5Qrcode", e);
     }
+
+    // Load initial data
+    if (config.apiUrl) {
+        loadEvents();
+    }
+
+    // Always try to load cameras (user permission might be needed)
+    loadCameras();
 }
 
 function loadConfig() {
     const saved = localStorage.getItem(CONFIG_KEY);
     if (saved) {
-        config = JSON.parse(saved);
+        try {
+            config = JSON.parse(saved);
+        } catch (e) {
+            console.error("Failed to parse config", e);
+        }
     }
 
     // Populate inputs with saved or default values
-    els.apiUrlInput.value = config.apiUrl || DEFAULT_CONFIG.apiUrl || '';
-    els.apiKeyInput.value = config.apiKey || DEFAULT_CONFIG.apiKey || '';
+    if (els.apiUrlInput) els.apiUrlInput.value = config.apiUrl || '';
+    if (els.apiKeyInput) els.apiKeyInput.value = config.apiKey || '';
 }
 
 function saveConfig() {
@@ -107,8 +110,15 @@ function setupEventListeners() {
 
     els.eventSelect.addEventListener('change', (e) => {
         state.selectedEventId = e.target.value;
-        state.selectedEvent = allEvents.find(event => event.event_id === e.target.value);
+        state.selectedEvent = (window.allEvents || []).find(event => event.event_id === e.target.value);
     });
+
+    els.cameraSelect.addEventListener('change', (e) => {
+        state.selectedCameraId = e.target.value;
+    });
+
+    els.startScanBtn.addEventListener('click', startScanner);
+    els.stopScanBtn.addEventListener('click', stopScanner);
 
     els.closeUserModal.addEventListener('click', hideUserModal);
 
@@ -117,14 +127,24 @@ function setupEventListeners() {
         if (e.target === els.userModal) hideUserModal();
     });
 
-    els.manualInputBtn.addEventListener('click', () => {
-        els.manualInputContainer.classList.toggle('hidden');
-    });
+    if (els.manualInputBtn) {
+        els.manualInputBtn.addEventListener('click', () => {
+            els.manualInputContainer.classList.toggle('hidden');
+        });
+    }
 
-    els.manualSubmitBtn.addEventListener('click', () => {
-        const userId = els.manualUserIdInput.value.trim();
-        if (userId) handleUserScan(userId);
-    });
+    if (els.manualSubmitBtn) {
+        els.manualSubmitBtn.addEventListener('click', () => {
+            const userId = els.manualUserIdInput.value.trim();
+            if (userId) {
+                // If manual input usage also implies we should have an event and API key,
+                // handleUserScan will check API key implicitly via apiCall, 
+                // but we should check event selection explicitly.
+                if (!checkPrerequisites()) return;
+                handleUserScan(userId);
+            }
+        });
+    }
 
     // Number inputs
     document.querySelectorAll('.step-btn').forEach(btn => {
@@ -159,6 +179,9 @@ async function apiCall(endpoint, method = 'GET', body = null) {
         if (body) options.body = JSON.stringify(body);
 
         const res = await fetch(`${config.apiUrl}${endpoint}`, options);
+        // Catch network errors specifically
+        if (!res) throw new Error("Network Error");
+
         const data = await res.json();
 
         if (!res.ok) {
@@ -167,144 +190,163 @@ async function apiCall(endpoint, method = 'GET', body = null) {
         return data;
     } catch (err) {
         console.error('API Call Failed:', err);
-        showToast(`Error: ${err.message}`);
+        // Don't show toast here for 404s if we handle them elsewhere, 
+        // but generally it's okay for critical failures.
+        if (err.message && !err.message.includes('404')) {
+            showToast(`Error: ${err.message}`);
+        }
         throw err;
     }
 }
 
 // --- Logic ---
 
-async function loadEvents() {
+function checkPrerequisites() {
+    if (!config.apiKey) {
+        showToast("Please configure API Key first.");
+        showSettingsModal();
+        return false;
+    }
+    if (!state.selectedEventId) {
+        showToast("Please select an event first.");
+        return false;
+    }
+    return true;
+}
+
+async function loadCameras() {
     try {
-        els.eventSelect.innerHTML = '<option>Loading...</option>';
-        els.eventSelect.disabled = true;
+        const cameras = await Html5Qrcode.getCameras();
+        els.cameraSelect.innerHTML = '<option value="">Select Camera</option>';
 
-        // Fetch all events
-        const data = await apiCall('/api/events/all');
-
-        els.eventSelect.innerHTML = '<option value="">-- Select Event --</option>';
-
-        if (data.events && data.events.length > 0) {
-            // Filter out events that ended more than 24 hours ago
-            const now = new Date();
-            const oneDayAgo = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-
-            const activeEvents = data.events.filter(event => {
-                const endDate = new Date(event.event_end_datetime);
-                return endDate > oneDayAgo;
+        if (cameras && cameras.length) {
+            cameras.forEach(camera => {
+                const opt = document.createElement('option');
+                opt.value = camera.id;
+                opt.textContent = camera.label || `Camera ${camera.id}`;
+                els.cameraSelect.appendChild(opt);
             });
 
-            // Sort events: Closest upcoming/active first
-            // We sort by start_datetime. 
-            // If we want "current" events at top, we might want to sort by start_datetime ascending?
-            // Actually, usually you want the event happening *now* or *soon*.
-            // Let's sort by start_datetime descending (newest first) so future events are at top?
-            // No, usually ascending (earliest first) is better for "upcoming".
-            // But if there are many future events, the one today might be buried.
-            // Let's stick to standard: Start datetime descending (newest first) often puts the latest created/scheduled event at top if they are added sequentially.
-            // Wait, if I have an event next year and an event today.
-            // Descending: Next year event comes first.
-            // Ascending: Today event comes first.
-            // Let's go with Ascending (Earliest first) but filter out old ones.
-            // Actually, let's just sort by start_datetime descending so the "latest" event is first.
-            activeEvents.sort((a, b) => {
-                return new Date(b.event_start_datetime) - new Date(a.event_start_datetime);
-            });
-
-            // Store all active events for later lookup
-            allEvents = activeEvents;
-
-            if (activeEvents.length > 0) {
-                activeEvents.forEach(event => {
-                    const opt = document.createElement('option');
-                    opt.value = event.event_id;
-                    const startDate = new Date(event.event_start_datetime).toLocaleDateString();
-                    opt.textContent = `${event.event_name} (${startDate})`;
-                    els.eventSelect.appendChild(opt);
-                });
-                els.eventSelect.disabled = false;
-            } else {
-                els.eventSelect.innerHTML = '<option>No active events found</option>';
+            // Auto-select last camera (often back camera on mobile)
+            if (cameras.length > 0) {
+                state.selectedCameraId = cameras[cameras.length - 1].id;
+                els.cameraSelect.value = state.selectedCameraId;
             }
         } else {
-            els.eventSelect.innerHTML = '<option>No events found</option>';
+            els.cameraSelect.innerHTML = '<option value="">No cameras found</option>';
         }
     } catch (err) {
-        els.eventSelect.innerHTML = '<option>Error loading events</option>';
-        console.error(err);
+        console.error("Error getting cameras", err);
+        els.cameraSelect.innerHTML = '<option value="">Camera Error (Check Permissions)</option>';
     }
 }
 
-function startScanner() {
-    // If a scanner already exists, clear it first
-    if (html5Scanner) {
-        html5Scanner.clear().catch(() => { /* ignore */ });
-        html5Scanner = null;
+async function startScanner() {
+    if (state.isScanning) return;
+
+    // 1. Check Logic Requirements
+    if (!checkPrerequisites()) return;
+
+    // Use selected camera or first available if not selected manually
+    let cameraIdToUse = state.selectedCameraId;
+    if (!cameraIdToUse) {
+        // Try to pick one if list is populated but nothing selected
+        if (els.cameraSelect.options.length > 1) {
+            cameraIdToUse = els.cameraSelect.options[1].value; // 0 is placeholder
+            state.selectedCameraId = cameraIdToUse;
+            els.cameraSelect.value = cameraIdToUse;
+        } else {
+            showToast("No camera selected.");
+            return;
+        }
     }
 
-    html5Scanner = new Html5QrcodeScanner(
-        "reader",
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        /* verbose= */ false
-    );
+    try {
+        state.isScanning = true;
+        setScanUI(true);
+        els.scanStatus.textContent = "Starting Camera...";
 
-    html5Scanner.render(onScanSuccess, onScanFailure);
+        await html5QrCode.start(
+            cameraIdToUse,
+            {
+                fps: 10,
+                qrbox: { width: 250, height: 250 }
+            },
+            onScanSuccess,
+            onScanFailure
+        );
+
+        els.scanStatus.textContent = "Scanning... Point at QR Code";
+
+    } catch (err) {
+        console.error("Failed to start scanner", err);
+        showToast("Failed to start camera");
+        state.isScanning = false;
+        setScanUI(false);
+        els.scanStatus.textContent = "Camera failed to start.";
+    }
+}
+
+async function stopScanner() {
+    if (!state.isScanning) return;
+
+    try {
+        await html5QrCode.stop();
+        state.isScanning = false;
+        setScanUI(false);
+        els.scanStatus.textContent = "Scanner stopped.";
+    } catch (err) {
+        console.warn("Error stopping scanner", err);
+        // Force UI reset anyway
+        state.isScanning = false;
+        setScanUI(false);
+    }
+}
+
+function setScanUI(isScanning) {
+    if (isScanning) {
+        els.startScanBtn.classList.add('hidden');
+        els.stopScanBtn.classList.remove('hidden');
+        els.cameraSelect.disabled = true;
+    } else {
+        els.startScanBtn.classList.remove('hidden');
+        els.stopScanBtn.classList.add('hidden');
+        els.cameraSelect.disabled = false;
+    }
 }
 
 function onScanSuccess(decodedText, decodedResult) {
-    // Prevent multiple scans: set processing flag immediately to avoid race windows
     if (state.isProcessing) return;
+
+    // Pause scanning visually/logically
+    // We don't necessarily stop the stream, just pause processing
     state.isProcessing = true;
+    html5QrCode.pause();
 
-    // Basic validation: assume QR code is just the user_id
-    // If it's a URL, extract the ID? For now assume raw ID.
-    const userId = decodedText.trim();
-
-    console.log(`Scan result: ${userId}`);
-    // Stop the scanner immediately to avoid further detections while we process.
-    stopScanner();
-    scannerPaused = true;
-
-    // Call handler (it will show modal and perform API calls). The handler will
-    // clear `state.isProcessing` when finished. Scanner will be restarted when
-    // the modal is closed (hideUserModal).
-    handleUserScan(userId);
+    console.log(`Scan result: ${decodedText}`);
+    handleUserScan(decodedText.trim());
 }
 
 function onScanFailure(error) {
-    // handle scan failure, usually better to ignore and keep scanning.
-    // console.warn(`Code scan error = ${error}`);
+    // frequent, ignore
 }
 
 async function handleUserScan(userId) {
-    // Mark processing (may already be set by scanner path)
-    state.isProcessing = true;
+    // Show Modal Loading
+    showUserModal();
+    setModalLoading(true);
 
-    if (!state.selectedEventId) {
-        showToast('Please select an event first');
-        // If we cleared the scanner earlier, restart it so scanning can continue
-        state.isProcessing = false;
-        if (!html5Scanner) startScanner();
-        return;
-    }
-
-    const modalOpen = !els.userModal.classList.contains('hidden');
-    if (!modalOpen) {
-        showUserModal();
-    } else {
-        // If modal already open, just show loading state while we refresh content
-        setModalLoading(true);
-    }
+    // Reset fallback ID text to ensure we don't show old/default data
+    els.userIdDisplay.textContent = `ID: ---`;
+    els.userName.textContent = "Loading...";
+    els.userTags.innerHTML = '';
 
     try {
         // 1. Fetch User Info
-        // We need name, student_id, grade, etc.
-        // Assuming we have read permissions for these.
         const userRes = await apiCall(`/api/user/read?user_id=${userId}`);
-        state.currentUser = userRes.data; // Adjust based on actual response structure
+        state.currentUser = userRes.data;
 
         // 2. Fetch Booking Status
-        // We use the status endpoint
         let bookingStatus = 'none';
         let bookingData = null;
 
@@ -313,8 +355,7 @@ async function handleUserScan(userId) {
             bookingStatus = statusRes.status;
             bookingData = statusRes;
         } catch (err) {
-            // 404 means no booking
-            if (err.message.includes('404') || err.message.includes('not found')) {
+            if (err.message && (err.message.includes('404') || err.message.includes('not found'))) {
                 bookingStatus = 'none';
             } else {
                 throw err;
@@ -325,22 +366,71 @@ async function handleUserScan(userId) {
         renderUserModal(state.currentUser, bookingStatus, bookingData);
 
     } catch (err) {
-        // Keep modal open if it was already open; otherwise hide it.
-        if (!els.userModal.classList.contains('hidden')) {
-            // show error inside modal briefly
-            showToast('Failed to load user data');
-        } else {
-            hideUserModal();
-            showToast('Failed to load user data');
-        }
+        console.error(err);
+        showToast('Failed to load user data');
+
+        // Show error state in modal instead of default fake user
+        els.userName.textContent = "Error";
+        els.userIdDisplay.textContent = "ID: Error";
+        els.bookingStatusContainer.innerHTML = `<div class="alert alert-warning">Could not find user or error occurred.</div>`;
+        els.userTags.innerHTML = '';
+
+        // Hide actions
+        els.notRegisteredActions.classList.add('hidden');
+        els.checkinActions.classList.add('hidden');
+        els.attendedActions.classList.add('hidden');
+
     } finally {
         setModalLoading(false);
-        state.isProcessing = false;
     }
 }
 
+async function loadEvents() {
+    try {
+        els.eventSelect.innerHTML = '<option>Loading...</option>';
+        els.eventSelect.disabled = true;
+
+        const data = await apiCall('/api/events/all');
+        const now = new Date();
+        const oneDayAgo = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+
+        const activeEvents = (data.events || []).filter(event => {
+            const endDate = new Date(event.event_end_datetime);
+            return endDate > oneDayAgo;
+        });
+
+        // Sort: Latest start date first
+        activeEvents.sort((a, b) => new Date(b.event_start_datetime) - new Date(a.event_start_datetime));
+
+        // Global store
+        window.allEvents = activeEvents;
+
+        els.eventSelect.innerHTML = '<option value="">-- Select Event --</option>';
+        if (activeEvents.length > 0) {
+            activeEvents.forEach(event => {
+                const opt = document.createElement('option');
+                opt.value = event.event_id;
+                const startDate = new Date(event.event_start_datetime).toLocaleDateString();
+                opt.textContent = `${event.event_name} (${startDate})`;
+                els.eventSelect.appendChild(opt);
+            });
+            els.eventSelect.disabled = false;
+        } else {
+            els.eventSelect.innerHTML = '<option>No active events found</option>';
+        }
+
+    } catch (err) {
+        console.error(err);
+        els.eventSelect.innerHTML = '<option>Error loading events</option>';
+        els.eventSelect.disabled = false; // Allow retry or change config
+
+        // Don't toast here, it's annoying on init if not configured yet
+    }
+}
+
+// --- Modal Rendering & Actions ---
+
 function renderUserModal(user, status, bookingData) {
-    // User Info
     els.userName.textContent = user.name || 'Unknown User';
     els.userIdDisplay.textContent = `ID: ${user.id}`;
 
@@ -353,48 +443,40 @@ function renderUserModal(user, status, bookingData) {
         els.userTags.appendChild(span);
     });
 
-    // Reset Actions
     els.notRegisteredActions.classList.add('hidden');
     els.checkinActions.classList.add('hidden');
     els.attendedActions.classList.add('hidden');
     els.bookingStatusContainer.innerHTML = '';
 
-    // Status Badge
     const badge = document.createElement('div');
     badge.className = `status-badge status-${status}`;
     badge.textContent = status.toUpperCase();
     els.bookingStatusContainer.appendChild(badge);
 
-    // Logic
     if (status === 'none' || status === 'cancelled' || status === 'rejected') {
         els.notRegisteredActions.classList.remove('hidden');
     } else if (status === 'confirmed' || status === 'lottery') {
         els.checkinActions.classList.remove('hidden');
-        // Reset inputs with default values
         const defaultScore = document.getElementById('default-score').value || 0;
         const defaultCoin = document.getElementById('default-coin').value || 0;
         els.scoreInput.value = defaultScore;
         els.coinInput.value = defaultCoin;
     } else if (status === 'attended') {
         els.attendedActions.classList.remove('hidden');
-        // Show time if available (mocking for now as API might not return exact checkin time in status endpoint)
         els.checkinTimeDisplay.textContent = new Date().toLocaleTimeString();
     }
 }
 
 async function registerUser() {
     if (!confirm('Register this user for the event?')) return;
-
     try {
         setModalLoading(true);
-        // Create booking
         await apiCall(`/api/events/${state.selectedEventId}/bookings`, 'POST', {
             user_id: state.currentUser.id
         });
-
-        // Refresh status
-        handleUserScan(state.currentUser.id);
         showToast('User registered successfully');
+        // Re-check user status
+        handleUserScan(state.currentUser.id);
     } catch (err) {
         showToast('Registration failed');
         setModalLoading(false);
@@ -404,16 +486,15 @@ async function registerUser() {
 async function confirmCheckin() {
     try {
         setModalLoading(true);
-
-        // 1. Update Status to attended
         await apiCall(`/api/events/${state.selectedEventId}/bookings/status`, 'POST', {
             user_id: state.currentUser.id,
             status: 'attended'
         });
 
-        // 2. Add Score (if > 0)
         const score = parseInt(els.scoreInput.value);
-        const eventName = state.selectedEvent?.event_name || state.selectedEventId;
+        // Fallback for description
+        const eventName = state.selectedEvent ? state.selectedEvent.event_name : 'Event Check-in';
+
         if (score !== 0) {
             await apiCall('/api/score/write', 'POST', {
                 user_id: state.currentUser.id,
@@ -422,7 +503,6 @@ async function confirmCheckin() {
             });
         }
 
-        // 3. Add Coin (if > 0)
         const coin = parseInt(els.coinInput.value);
         if (coin !== 0) {
             await apiCall('/api/coin/write', 'POST', {
@@ -434,7 +514,6 @@ async function confirmCheckin() {
 
         showToast('Check-in Complete!');
         hideUserModal();
-
     } catch (err) {
         showToast('Check-in failed');
         setModalLoading(false);
@@ -445,6 +524,13 @@ async function confirmCheckin() {
 
 function showSettingsModal() {
     els.settingsModal.classList.remove('hidden');
+    // If scanning, stop it? Or just let it run in background?
+    // Better to stop it to save resources/conflicts
+    if (state.isScanning) {
+        // Maybe just pause? But stop is safer.
+        // We won't auto-restart after settings though, user has to click Start again.
+        stopScanner();
+    }
 }
 
 function hideSettingsModal() {
@@ -452,29 +538,22 @@ function hideSettingsModal() {
 }
 
 function showUserModal() {
-    // Ensure scanner is stopped while modal is visible
-    stopScanner();
-    scannerPaused = true;
-
     els.userModal.classList.remove('hidden');
-    els.userContent.classList.add('hidden');
+    els.userContent.classList.add('hidden'); // Initially hidden until loaded
 }
 
 function hideUserModal() {
     els.userModal.classList.add('hidden');
     state.isProcessing = false;
 
-    // Restart scanner if it was paused when modal opened
-    if (scannerPaused) {
-        scannerPaused = false;
-        // small delay to avoid immediate re-detection
-        setTimeout(() => {
-            try {
-                startScanner();
-            } catch (e) {
-                console.warn('Failed to restart scanner', e);
-            }
-        }, 500);
+    // Resume scanning if it was running
+    if (state.isScanning) {
+        try {
+            html5QrCode.resume();
+        } catch (e) {
+            console.warn("Failed to resume, pausing/stopping instead", e);
+            // If resume fails (e.g. not scanning), just ensure UI is reflected
+        }
     }
 }
 
@@ -489,6 +568,7 @@ function setModalLoading(isLoading) {
 }
 
 function showToast(msg) {
+    if (!els.toast) return;
     els.toast.querySelector('.toast-message').textContent = msg;
     els.toast.classList.remove('hidden');
     setTimeout(() => {
@@ -496,5 +576,4 @@ function showToast(msg) {
     }, 3000);
 }
 
-// Start
 document.addEventListener('DOMContentLoaded', init);
