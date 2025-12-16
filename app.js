@@ -82,6 +82,12 @@ function init() {
         } else if (!config.apiUrl) {
             showSettingsModal();
         }
+
+        // If config is missing, enable select so user can click it to trigger the check
+        if (!config.apiKey) {
+            els.eventSelect.innerHTML = '<option>Configure API Key...</option>';
+            els.eventSelect.disabled = false;
+        }
     }
 
     // Always try to load cameras (user permission might be needed)
@@ -121,6 +127,16 @@ function setupEventListeners() {
     els.eventSelect.addEventListener('change', (e) => {
         state.selectedEventId = e.target.value;
         state.selectedEvent = (window.allEvents || []).find(event => event.event_id === e.target.value);
+    });
+
+    // Check API availability when trying to open the dropdown
+    els.eventSelect.addEventListener('mousedown', (e) => {
+        if (!config.apiKey) {
+            e.preventDefault();
+            e.target.blur(); // Close dropdown if it managed to open
+            showToast("Please configure API Key first.");
+            showSettingsModal();
+        }
     });
 
     els.cameraSelect.addEventListener('change', (e) => {
