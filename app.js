@@ -1,6 +1,6 @@
 // Config
 const CONFIG_KEY = 'reception_app_config';
-const DEFAULT_CONFIG = { apiUrl: '', apiKey: '' };
+
 
 let config = {
     apiUrl: DEFAULT_CONFIG.apiUrl || '',
@@ -69,9 +69,19 @@ function init() {
         console.warn("Failed to init Html5Qrcode", e);
     }
 
-    // Load initial data
-    if (config.apiUrl) {
+    // Load initial data if we have full config
+    if (config.apiUrl && config.apiKey) {
         loadEvents();
+    } else {
+        // If critical config is missing, show settings immediately?
+        // Or wait for user to try an action?
+        // User requested: "API Keyがない状態だと，何か操作しようとした時に，API Keyを入力させるようにエラーを出して"
+        // So we don't necessarily need to open it on load, but we shouldn't error on load either.
+        if (config.apiUrl && !config.apiKey) {
+            // We have URL but no Key, so loadEvents would fail. Just skip it.
+        } else if (!config.apiUrl) {
+            showSettingsModal();
+        }
     }
 
     // Always try to load cameras (user permission might be needed)
@@ -165,7 +175,8 @@ function setupEventListeners() {
 
 async function apiCall(endpoint, method = 'GET', body = null) {
     if (!config.apiUrl || !config.apiKey) {
-        showToast('API Config missing');
+        showToast('API Config missing. Please check settings.');
+        showSettingsModal();
         throw new Error('Config missing');
     }
 
@@ -259,6 +270,11 @@ async function startScanner() {
             showToast("No camera selected.");
             return;
         }
+    }
+
+    if (!cameraIdToUse) {
+        showToast("Invalid camera ID.");
+        return;
     }
 
     try {
