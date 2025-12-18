@@ -111,7 +111,7 @@ function loadConfig() {
 
 function saveConfig() {
     config.apiUrl = els.apiUrlInput.value.replace(/\/$/, ''); // Remove trailing slash
-    config.apiKey = els.apiKeyInput.value;
+    config.apiKey = els.apiKeyInput.value.replace(/[\s\u3000]/g, '');
     localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
     hideSettingsModal();
     showToast('Settings saved');
